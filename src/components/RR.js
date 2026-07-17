@@ -10,38 +10,66 @@ const RoundRobinScheduler = ({ rows, quantum }) => {
     if (rows && rows.length > 0 && quantum > 0) {
       // Sort rows by arrival time
       const sortedRows = rows.slice().sort((a, b) => parseInt(a.arrivalTime) - parseInt(b.arrivalTime));
+      const n = sortedRows.length;
 
       let currentTime = 0;
       let remainingBurstTimes = sortedRows.map((row) => parseInt(row.burstTime));
-      let waitingTimes = new Array(sortedRows.length).fill(0);
-      let turnaroundTimes = new Array(sortedRows.length).fill(0);
+      let waitingTimes = new Array(n).fill(0);
+      let turnaroundTimes = new Array(n).fill(0);
 
       const updatedProcesses = [];
 
-      while (remainingBurstTimes.some((bt) => bt > 0)) {
-        for (let i = 0; i < sortedRows.length; i++) {
-          const burstTime = remainingBurstTimes[i];
+      // Proper ready-queue based Round Robin: a process index only enters
+      // the queue once its arrival time has actually passed.
+      const queue = [];
+      let nextArrivalIndex = 0;
 
-          if (burstTime > 0) {
-            const executeTime = Math.min(quantum, burstTime);
-            const start = currentTime; // Keep track of the actual start time
-            currentTime += executeTime;
-            remainingBurstTimes[i] -= executeTime;
+      const enqueueArrivals = (time) => {
+        while (nextArrivalIndex < n && parseInt(sortedRows[nextArrivalIndex].arrivalTime) <= time) {
+          queue.push(nextArrivalIndex);
+          nextArrivalIndex++;
+        }
+      };
 
-            const turnaroundTime = currentTime - parseInt(sortedRows[i].arrivalTime);
-            const waitingTime = turnaroundTime - parseInt(sortedRows[i].burstTime);
+      // Nothing can run before the first process arrives
+      currentTime = parseInt(sortedRows[0].arrivalTime);
+      enqueueArrivals(currentTime);
 
-            waitingTimes[i] = waitingTime;
-            turnaroundTimes[i] = turnaroundTime;
+      while (queue.length > 0) {
+        const i = queue.shift();
 
-            updatedProcesses.push({
-              ...sortedRows[i],
-              startTime: start, // Set the actual start time
-              finishTime: currentTime,
-              waitingTime,
-              turnaroundTime,
-            });
-          }
+        const executeTime = Math.min(quantum, remainingBurstTimes[i]);
+        const start = currentTime; // Keep track of the actual start time
+        currentTime += executeTime;
+        remainingBurstTimes[i] -= executeTime;
+
+        const turnaroundTime = currentTime - parseInt(sortedRows[i].arrivalTime);
+        const waitingTime = turnaroundTime - parseInt(sortedRows[i].burstTime);
+
+        waitingTimes[i] = waitingTime;
+        turnaroundTimes[i] = turnaroundTime;
+
+        updatedProcesses.push({
+          ...sortedRows[i],
+          startTime: start, // Set the actual start time
+          finishTime: currentTime,
+          waitingTime,
+          turnaroundTime,
+        });
+
+        // Any process that arrived during this quantum joins the queue
+        // before the process that just ran gets re-queued (standard RR tie-break).
+        enqueueArrivals(currentTime);
+
+        if (remainingBurstTimes[i] > 0) {
+          queue.push(i);
+        }
+
+        // If nobody is ready but processes are still left to arrive, jump
+        // the clock forward instead of leaving a gap or scheduling early.
+        if (queue.length === 0 && nextArrivalIndex < n) {
+          currentTime = Math.max(currentTime, parseInt(sortedRows[nextArrivalIndex].arrivalTime));
+          enqueueArrivals(currentTime);
         }
       }
 
